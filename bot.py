@@ -158,6 +158,11 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
                     return
                 except Exception as e:
                     logger.warning(f"Found config message but couldn't parse it: {e}")
+    except ValueError as e:
+        if "Could not find the input entity" in str(e):
+            logger.warning("Bot hasn't seen the user yet. Awaiting /start command...")
+            return
+        logger.warning(f"Could not fetch history: {e}")
     except Exception as e:
         logger.warning(f"Could not fetch history: {e}")
         
@@ -186,12 +191,20 @@ async def save_config(bot_client: TelegramClient, user_id: int):
             CONFIG_MSG_ID = None
             
     if not CONFIG_MSG_ID:
-        msg = await bot_client.send_message(user_id, text)
-        CONFIG_MSG_ID = msg.id
         try:
-            await bot_client.pin_message(user_id, msg.id, notify=False)
-        except Exception:
-            pass
+            msg = await bot_client.send_message(user_id, text)
+            CONFIG_MSG_ID = msg.id
+            try:
+                await bot_client.pin_message(user_id, msg.id, notify=False)
+            except Exception:
+                pass
+        except ValueError as e:
+            if "Could not find the input entity" in str(e):
+                logger.warning("Waiting for the user to message the bot first to cache the entity.")
+            else:
+                logger.error(f"Failed to send config message: {e}")
+        except Exception as e:
+            logger.error(f"Failed to send config message: {e}")
 
 # ── Background Task ───────────────────────────────────────────────────────────
 
@@ -280,6 +293,10 @@ async def main():
 
     @bot_client.on(events.NewMessage(chats=[user_id], pattern=r"^/start$|^/help$"))
     async def cmd_help(event):
+        global CONFIG_MSG_ID
+        if not CONFIG_MSG_ID:
+            await load_or_create_config(bot_client, user_id)
+            
         text = (
             "🤖 **Product Stock Finder Bot**\n\n"
             "Track URLs and get notified when they are back in stock.\n\n"
