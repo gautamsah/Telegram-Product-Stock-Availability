@@ -141,26 +141,31 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
     logger.info("Looking for existing config in bot chat...")
     
     try:
-        async for msg in bot_client.iter_messages(user_id):
-            if msg.out and msg.text and "#CONFIG_DATA" in msg.text:
+        # Bots are restricted from using GetHistory. We must use the standard HTTP API to get the pinned message ID.
+        import aiohttp
+        bot_token = get_env("TELEGRAM_BOT_TOKEN")
+        url = f"https://api.telegram.org/bot{bot_token}/getChat?chat_id={user_id}"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                data = await resp.json()
+                
+        if data.get("ok") and "pinned_message" in data["result"]:
+            pinned_msg = data["result"]["pinned_message"]
+            if "#CONFIG_DATA" in pinned_msg.get("text", ""):
                 try:
-                    json_str = msg.text.split("```json")[1].split("```")[0].strip()
+                    text = pinned_msg["text"]
+                    json_str = text.split("```json")[1].split("```")[0].strip()
                     ACTIVE_CONFIG = json.loads(json_str)
-                    CONFIG_MSG_ID = msg.id
+                    CONFIG_MSG_ID = pinned_msg["message_id"]
                     
                     ACTIVE_CONFIG.pop("next_id", None)
-                        
-                    logger.info("Loaded config from Telegram chat history!")
+                    logger.info("Loaded config from pinned message via Bot API!")
                     return
                 except Exception as e:
                     logger.warning(f"Found config message but couldn't parse it: {e}")
-    except ValueError as e:
-        if "Could not find the input entity" in str(e):
-            logger.warning("Bot hasn't seen the user yet. Awaiting /start command...")
-            return
-        logger.warning(f"Could not fetch history: {e}")
     except Exception as e:
-        logger.warning(f"Could not fetch history: {e}")
+        logger.warning(f"Could not fetch pinned message: {e}")
         
     logger.info("No config found in chat. Creating a new pinned config message...")
     await save_config(bot_client, user_id)
