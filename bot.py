@@ -47,8 +47,7 @@ ACTIVE_CONFIG = {
         "check_interval_minutes": 10,
         "delay_seconds": 5,
         "auto_clean": True
-    },
-    "next_id": 1
+    }
 }
 CONFIG_MSG_ID = None
 
@@ -149,10 +148,7 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
                     ACTIVE_CONFIG = json.loads(json_str)
                     CONFIG_MSG_ID = msg.id
                     
-                    # Ensure next_id exists
-                    if "next_id" not in ACTIVE_CONFIG:
-                        max_id = max([u.get("id", 0) for u in ACTIVE_CONFIG.get("urls", [])], default=0)
-                        ACTIVE_CONFIG["next_id"] = max_id + 1
+                    ACTIVE_CONFIG.pop("next_id", None)
                         
                     logger.info("Loaded config from Telegram chat history!")
                     return
@@ -315,9 +311,18 @@ async def main():
         if not url.startswith("http"):
             url = "https://" + url
             
-        uid = ACTIVE_CONFIG["next_id"]
-        ACTIVE_CONFIG["next_id"] += 1
-        
+        # Check for duplicates
+        for u in ACTIVE_CONFIG.get("urls", []):
+            if u["url"] == url:
+                await event.reply(f"⚠️ You are already tracking this URL (ID **{u['id']}**).")
+                return
+            
+        # Find the lowest available ID
+        existing_ids = {u["id"] for u in ACTIVE_CONFIG.get("urls", [])}
+        uid = 1
+        while uid in existing_ids:
+            uid += 1
+            
         # Initial check to get status
         await event.reply(f"🔍 Checking initial status for ID {uid}...")
         status = await check_stock(url)
@@ -355,7 +360,7 @@ async def main():
             await event.reply("📋 You are not tracking any URLs right now.")
             return
             
-        text = "📋 **Tracked URLs:**\n\n"
+        text = f"📋 **Tracked URLs ({len(urls)} total):**\n\n"
         for u in urls:
             status = u.get("status", "unknown")
             status_emoji = "🟢" if status == "in_stock" else "🔴" if status == "out_of_stock" else "⚠️"
