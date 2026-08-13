@@ -23,7 +23,7 @@ Instead of saving settings to a file or requiring you to set up a database (like
 
 **How it works:**
 1. When the bot starts, it makes a lightweight HTTP request directly to the Telegram Bot API (`getChat` endpoint) to fetch the **pinned message** in your private chat.
-2. If the pinned message contains `#CONFIG_DATA`, it extracts the JSON text from that message and loads your tracked URLs into memory.
+2. If the pinned message contains `#CONFIG_DATA`, it locates the brackets `{` and `}` to extract the raw JSON data (bypassing any Markdown formatting stripped by Telegram) and loads your tracked URLs into memory.
 3. Every time you track a new URL, untrack an old one, or the bot updates the `last_checked` timestamp, it simply edits this pinned message with the new JSON data.
 
 This clever architecture means your data is safely backed up to Telegram's cloud forever, 100% for free, without needing external database providers.
