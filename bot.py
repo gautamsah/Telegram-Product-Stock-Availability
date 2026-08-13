@@ -141,7 +141,6 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
     logger.info("Looking for existing config in bot chat...")
     
     try:
-        # Bots are restricted from using GetHistory. We must use the standard HTTP API to get the pinned message ID.
         import aiohttp
         bot_token = get_env("TELEGRAM_BOT_TOKEN")
         url = f"https://api.telegram.org/bot{bot_token}/getChat?chat_id={user_id}"
@@ -149,21 +148,30 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 data = await resp.json()
+                logger.info(f"getChat response: {json.dumps(data)}")
                 
-        if data.get("ok") and "pinned_message" in data["result"]:
-            pinned_msg = data["result"]["pinned_message"]
-            if "#CONFIG_DATA" in pinned_msg.get("text", ""):
-                try:
-                    text = pinned_msg["text"]
-                    json_str = text.split("```json")[1].split("```")[0].strip()
-                    ACTIVE_CONFIG = json.loads(json_str)
-                    CONFIG_MSG_ID = pinned_msg["message_id"]
-                    
-                    ACTIVE_CONFIG.pop("next_id", None)
-                    logger.info("Loaded config from pinned message via Bot API!")
-                    return
-                except Exception as e:
-                    logger.warning(f"Found config message but couldn't parse it: {e}")
+        if data.get("ok"):
+            if "pinned_message" in data["result"]:
+                pinned_msg = data["result"]["pinned_message"]
+                if "#CONFIG_DATA" in pinned_msg.get("text", ""):
+                    try:
+                        text = pinned_msg["text"]
+                        json_str = text.split("```json")[1].split("```")[0].strip()
+                        ACTIVE_CONFIG = json.loads(json_str)
+                        CONFIG_MSG_ID = pinned_msg["message_id"]
+                        
+                        ACTIVE_CONFIG.pop("next_id", None)
+                        logger.info("Loaded config from pinned message via Bot API!")
+                        return
+                    except Exception as e:
+                        logger.warning(f"Found config message but couldn't parse it: {e}")
+                else:
+                    logger.warning("Pinned message found, but does not contain #CONFIG_DATA")
+            else:
+                logger.warning("getChat succeeded, but no 'pinned_message' field in result.")
+        else:
+            logger.warning(f"getChat failed: {data}")
+            
     except Exception as e:
         logger.warning(f"Could not fetch pinned message: {e}")
         
