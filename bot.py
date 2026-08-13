@@ -156,7 +156,12 @@ async def load_or_create_config(bot_client: TelegramClient, user_id: int):
                 if "#CONFIG_DATA" in pinned_msg.get("text", ""):
                     try:
                         text = pinned_msg["text"]
-                        json_str = text.split("```json")[1].split("```")[0].strip()
+                        start_idx = text.find('{')
+                        end_idx = text.rfind('}')
+                        if start_idx == -1 or end_idx == -1:
+                            raise ValueError("Could not find JSON brackets in text.")
+                        json_str = text[start_idx:end_idx+1]
+                        
                         ACTIVE_CONFIG = json.loads(json_str)
                         CONFIG_MSG_ID = pinned_msg["message_id"]
                         
