@@ -241,9 +241,10 @@ async def stock_checker_loop(bot_client: TelegramClient, user_id: int):
                 )
                 await bot_client.send_message(user_id, msg, link_preview=False)
             
-            if current_status != "error" and current_status != last_status:
-                u_obj["status"] = current_status
+            if current_status != "error":
                 u_obj["last_checked"] = datetime.now().isoformat()
+                if current_status != last_status:
+                    u_obj["status"] = current_status
                 changed = True
             
             # Sleep between requests to avoid bans

@@ -1,78 +1,40 @@
 # 🛠️ Implementation Guide & Architecture
 
-This document explains how the **Deals Notification Bot** works under the hood. If you want to modify the code or understand how it bypasses the limits of free cloud hosting, read on!
+This document explains how the **Product Stock Finder Bot** works under the hood. If you want to modify the code or understand how it bypasses the limits of free cloud hosting, read on!
 
 ## Architecture Overview
 
-The bot uses a **Dual-Client Architecture** powered by the `Telethon` Python library.
+The bot uses the `Telethon` Python library to communicate with the Telegram API and `cloudscraper` combined with `BeautifulSoup` to scrape e-commerce websites.
 
-1. **The User Client**: Connects to Telegram as *you* (using your phone number/session). This is necessary because Telegram Bots cannot read messages in channels unless they are an Admin. Your user account reads the channels silently in the background.
-2. **The Bot Client**: Connects to Telegram as your *Bot* (using the Bot Token). This client listens to your chat window, provides the slash commands (`/channels`, `/keywords`), and sends the push notifications to your phone when a deal is found.
-
-Both clients run in the exact same `asyncio` event loop simultaneously inside `bot.py`.
+1. **The Bot Client**: Connects to Telegram as your *Bot* (using the Bot Token). This client listens to your chat window, handles the slash commands (`/track`, `/list`), and sends push notifications to your phone when an item is back in stock.
+2. **The Web Scraper**: An asynchronous background loop (`stock_checker_loop`) that periodically fetches the HTML of your tracked product URLs.
 
 ---
 
 ## ☁️ The "Ephemeral Storage" Problem (And Solution)
 
 ### The Problem
-Free cloud providers (like Render, Heroku, Koyeb) use **Ephemeral File Systems**. This means every time they restart your app (usually once every 24 hours), they wipe the hard drive clean and re-download your code from GitHub. 
+Free cloud providers (like Render) use **Ephemeral File Systems**. This means every time they restart your app (which can happen daily), they wipe the hard drive clean and re-download your code from GitHub. 
 
-If we used a standard `config.json` file to save your keywords and channels, all your settings would be deleted every single day.
+If we used a standard `config.json` file to save your tracked URLs locally, all your tracked links would be deleted every single day.
 
 ### The Solution: Telegram-Native Storage
-Instead of saving settings to a file or requiring you to set up a database (like MongoDB), the bot uses Telegram itself as the database.
+Instead of saving settings to a file or requiring you to set up a database (like MongoDB or PostgreSQL), the bot uses Telegram itself as the database!
 
 **How it works:**
-1. When the bot starts, it searches its own chat history with you for a message containing `#CONFIG_DATA`.
-2. If it finds it, it extracts the JSON text from that message and loads your channels/keywords into memory.
-3. If it doesn't find one (e.g., on first startup), it creates a new message with default settings and pins it to the chat.
-4. Whenever you use a command like `/add_keyword` or tap an inline button to toggle a channel, the bot modifies the JSON in its memory and **edits the pinned message** to save the changes.
+1. When the bot starts, it makes a lightweight HTTP request directly to the Telegram Bot API (`getChat` endpoint) to fetch the **pinned message** in your private chat.
+2. If the pinned message contains `#CONFIG_DATA`, it extracts the JSON text from that message and loads your tracked URLs into memory.
+3. Every time you track a new URL, untrack an old one, or the bot updates the `last_checked` timestamp, it simply edits this pinned message with the new JSON data.
 
-Because the data is stored in the Telegram cloud (inside the message text), it completely survives server restarts!
-
----
-
-## Code Breakdown (`bot.py`)
-
-### 1. `load_or_create_config()`
-This function runs at startup. It uses `bot_client.iter_messages()` to search your chat history for the config message. 
-
-### 2. `save_config()`
-This function takes the `ACTIVE_CONFIG` Python dictionary, converts it to JSON, and edits the pinned `#CONFIG_DATA` message. It's called every time you make a change via a slash command.
-
-### 3. `is_monitored_chat()`
-This is the filter function for the User Client. When a message arrives in *any* channel you are a part of, this function checks if that channel's ID exists in your `ACTIVE_CONFIG` and is set to `"enabled": true`. If not, the message is ignored.
-
-### 4. Cooldown System
-To prevent spam (e.g., if a channel posts 5 messages about the same sale in 10 seconds), the bot tracks `COOLDOWNS`. When a deal is found in a channel, it records the timestamp. It will ignore any further deals from that specific channel for the next 15 seconds (configurable).
+This clever architecture means your data is safely backed up to Telegram's cloud forever, 100% for free, without needing external database providers.
 
 ---
 
-## 🗑️ Chat Auto-Cleanup
+## 🕷️ Scraping Strategy
 
-Because this bot is designed to run 24/7 and push deals to you constantly, the chat could quickly become cluttered with thousands of messages. 
+E-commerce websites use many different formats to indicate if an item is in stock. To make the bot work on as many sites as possible without needing custom scrapers for each one, it checks availability in the following order:
 
-To solve this, the bot includes a background `auto_clean_chat` asyncio task that wakes up every 1 hour. It fetches the chat history, preserves the newest 200 messages, and permanently deletes anything older than that. 
-
-Crucially, it is programmed to **never delete the pinned `#CONFIG_DATA` message**, ensuring your settings are always protected from the sweeping process. You can toggle this behavior using `/toggle_cleanup`.
-
----
-
-## 📱 Slash Command Auto-Registration
-
-If you type `/` in standard Telegram bots, a native menu pops up showing you all available commands. Normally, bot creators have to manually register these with `@BotFather`. 
-
-To make deployment as easy as possible, the bot leverages `SetBotCommandsRequest` from the Telethon API. The moment the bot connects to the server, it automatically pushes its internal command list (like `/channels`, `/keywords`) straight to the Telegram servers, immediately unlocking the native popup menu on your phone!
-
----
-
-## 🔗 URL Unshortener & Metadata Extraction
-
-To deal with obfuscated affiliate links (like `amzn.to` or `bit.ly`), the bot includes a background HTTP fetcher using the `aiohttp` library.
-
-When the `user_client` detects a matching deal message:
-1. It uses a regular expression to extract all URLs from the raw text.
-2. It launches an asynchronous HTTP GET request for each URL, allowing the server to follow all HTTP `301` and `302` redirects.
-3. Once it hits the final destination, it parses the HTML response using a regex to grab the `<title>` tag (giving us the product name).
-4. The `bot_client` then fires off a secondary message containing the clean product titles, keeping the actual direct URLs neatly hidden behind a standard `[Link]` markdown hyperlink to prevent chat clutter!
+1. **JSON-LD Schema (Most Reliable)**: The bot looks for `<script type="application/ld+json">` tags containing a `Product` and `Offer` schema. This is the industry standard for e-commerce SEO. Platforms like Shopify explicitly declare `schema.org/InStock` or `schema.org/OutOfStock` in this hidden data.
+2. **Meta Tags**: The bot looks for `<meta property="og:availability">` or `<meta property="product:availability">`.
+3. **Text Heuristics (Fallback)**: If structured data is completely missing, the bot strips away the scripts/styling and searches the visible HTML text for common phrases like "Out of stock", "Sold out", or "Currently unavailable". 
+4. **Cloudscraper**: To prevent e-commerce sites from immediately blocking the bot, it uses the `cloudscraper` library which mimics a real Chrome desktop browser to bypass basic anti-bot protections.
